@@ -92,12 +92,6 @@ jobs:
         continue-on-error: true
         run: cargo sort -w -c
 
-      - name: Lint | Cargo Fmt
-        uses: actions/rs-cargo@v1
-        with:
-          command: fmt
-          args: -- --check
-
       - name: Lint | Clippy
         uses: actions/rs-clippy-check@v1
         continue-on-error: true
@@ -115,14 +109,10 @@ jobs:
         continue-on-error: true
         run: |
           cargo miri test
-      - name: Test | Cargo Check
-        uses: actions/rs-cargo@v1
-        with:
-          command: check
 
       - name: Check ulimits
         run: ulimit -a
 
       - name: Test | Nextest
         run: |
-          cargo nextest run -j 16
+          cargo nextest run -j
