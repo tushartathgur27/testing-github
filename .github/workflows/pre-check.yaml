@@ -1,0 +1,128 @@
+on:
+  workflow_call:
+
+name: PR Review Conveyor Belt
+
+env:
+  RUST_TOOLCHAIN: nightly-2024-03-27
+  RUSTC_WORKSPACE_WRAPPER: ""
+
+jobs:
+  review-conveyor:
+    name: Thoughtful Scrutiny
+    runs-on: [self-hosted, linux, conveyor]
+    container:
+      image: artifactory.teslamotors.com:2032/tcp-build-utils-rust-glibc:v0.0.28
+      options: >-
+        --ulimit memlock=274877906944:274877906944
+    services:
+      object-store-archive-ci-local-test-scylla:
+        image: artifactory.teslamotors.com:2216/scylladev:v0.1.0
+        credentials:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASS }}
+      etcd:
+        image: bitnami/etcd:latest
+        ports:
+          # Maps tcp port 2379 on service container to the host
+          - 2379:2379
+
+    steps:
+      - name: Create SSH Agent
+        uses: DPE/.github/actions/ssh-agent@HEAD
+        with:
+          ssh-private-key: ${{ secrets.GITOPS_SSH_KEY }}
+
+      - name: Mangle SSH and Git Configs
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p 22 github-it.tesla.com > ~/.ssh/known_hosts
+          ssh-keyscan -t rsa -p 22 github-it.tesla.com >> ~/.ssh/known_hosts
+          echo 'github-it.tesla.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBKGhCQQLshDmMWJsFuuJNTI51OPeXCk9gnTn7cLYCnCJiTJYFluOp7ET88c3nmOO8ZWkF1jWM7LC44jSao40Y84=' >> ~/.ssh/known_hosts
+          cp ~/.ssh/known_hosts /root/.ssh/known_hosts
+          # git config --global core.sshCommand "ssh -vvv"
+          git config --global --unset-all url.git@github-it.tesla.com:.insteadof || true
+          git config --global --unset-all user.name || true
+          git config --global --unset-all user.email || true
+          git config --global user.name dpe-gitops
+          git config --global user.email dpe-gitops@teslamotors.com
+          git config \
+            --global url."git@github-it.tesla.com:".insteadOf "https://github-it.tesla.com"
+
+      - name: Setup | Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Scylla Tools
+        run: |
+          curl -sSf get.scylladb.com/server | bash -s -- --scylla-version 5.2
+
+      - name: Setup | Scylla Service
+        run: |
+          # Wait about 20 seconds before trying this command to give scylla time to start
+          sleep 20
+          cqlsh -e "CREATE KEYSPACE IF NOT EXISTS buckets_proxy_tiering WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };" object-store-archive-ci-local-test-scylla 9042
+          cqlsh -f hack/scylla.cql object-store-archive-ci-local-test-scylla 9042
+
+      - name: Setup | Rust Bootstrap
+        run: |
+          curl https://sh.rustup.rs -sSf | bash -s -- -y
+          echo "${HOME}/.cargo/bin" >> $GITHUB_PATH
+          apt-get update
+          apt-get install -y libfontconfig-dev
+
+      - name: Setup | Toolchain
+        uses: actions/rs-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          default: true
+          components: clippy, rustfmt
+
+      - name: Install Cargo helpers
+        run: |
+          cargo install cargo-sort
+          cargo install nextest
+
+      - name: Intermezzo | Toolchain Info
+        run: |
+          cargo --version --verbose
+          rustc --version
+          cargo clippy --version
+
+      - name: Lint | Cargo sort
+        continue-on-error: true
+        run: cargo sort -w -c
+
+      - name: Lint | Cargo Fmt
+        uses: actions/rs-cargo@v1
+        with:
+          command: fmt
+          args: -- --check
+
+      - name: Lint | Clippy
+        uses: actions/rs-clippy-check@v1
+        continue-on-error: true
+        with:
+          name: Blameless Review
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: -- --no-deps -D warnings
+
+      - name: Install Miri
+        continue-on-error: true
+        run: |
+          rustup component add miri --toolchain ${{ env.RUST_TOOLCHAIN }}-x86_64-unknown-linux-gnu
+          cargo miri setup
+      - name: Test | Miri
+        continue-on-error: true
+        run: |
+          cargo miri test
+      - name: Test | Cargo Check
+        uses: actions/rs-cargo@v1
+        with:
+          command: check
+
+      - name: Check ulimits
+        run: ulimit -a
+
+      - name: Test | Nextest
+        run: |
+          cargo nextest run -j 16

@@ -1,0 +1,40 @@
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+
+jobs:
+  pre-check:
+    uses: ./.github/workflows/pre-check.yaml
+    secrets: inherit # pragma: allowlist secret
+    if: github.event_name == 'pull_request'
+
+  merge-ok:
+    name: CI or approval
+    runs-on: [self-hosted] # any runner works
+    needs: pre-check
+
+    # Note: An approval must be the most recent action if that is what triggered the workflow.
+    # Pushing a new commit after an approval effectively invalidates the approval.
+    if: |
+      always()
+      && ((
+        github.event_name == 'pull_request_review'
+        && github.event.review.state == 'APPROVED'
+      ) || (
+        github.event_name == 'pull_request'
+        && needs.pre-merge.result == 'success'
+        && needs.auto-review.result == 'success'
+      ))
+
+    steps: # not allowed to be empty
+      - run: echo "CI is passing"
+        if: github.event_name == 'pull_request'
+
+      - run: echo "PR is approved"
+        if: github.event_name == 'pull_request_review'
