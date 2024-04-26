@@ -28,11 +28,6 @@ jobs:
           - 2379:2379
 
     steps:
-      - name: Create SSH Agent
-        uses: DPE/.github/actions/ssh-agent@HEAD
-        with:
-          ssh-private-key: ${{ secrets.GITOPS_SSH_KEY }}
-
       - name: Mangle SSH and Git Configs
         run: |
           mkdir -p ~/.ssh
@@ -70,13 +65,6 @@ jobs:
           apt-get update
           apt-get install -y libfontconfig-dev
 
-      - name: Setup | Toolchain
-        uses: actions/rs-toolchain@v1
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          default: true
-          components: clippy, rustfmt
-
       - name: Install Cargo helpers
         run: |
           cargo install cargo-sort
@@ -91,14 +79,6 @@ jobs:
       - name: Lint | Cargo sort
         continue-on-error: true
         run: cargo sort -w -c
-
-      - name: Lint | Clippy
-        uses: actions/rs-clippy-check@v1
-        continue-on-error: true
-        with:
-          name: Blameless Review
-          token: ${{ secrets.GITHUB_TOKEN }}
-          args: -- --no-deps -D warnings
 
       - name: Install Miri
         continue-on-error: true
